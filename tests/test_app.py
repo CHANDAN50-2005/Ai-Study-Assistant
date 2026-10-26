@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
-from study_engine import SourcePage, generate_quiz
+from study_engine import SourcePage, generate_multiple_choice_quiz, generate_quiz
 
 
 
@@ -73,6 +73,43 @@ class AppSmokeTests(unittest.TestCase):
         app.button[0].click().run()
         self.assertFalse(app.exception)
         self.assertTrue(any(item.proto.title == "Quiz checked" for item in app.success))
+
+    def test_explore_flashcards_render(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.text_area(key="notes_input_0").set_value(self.sample).run()
+        app.segmented_control(key="study_tool").set_value("Explore").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("Flashcards" in item.value for item in app.subheader))
+
+    def test_explore_multiple_choice_renders(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.text_area(key="notes_input_0").set_value(self.sample).run()
+        app.segmented_control(key="study_tool").set_value("Explore").run()
+        app.segmented_control(key="explore_tool").set_value("Multiple choice").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("Multiple-choice quiz" in item.value for item in app.subheader))
+
+    def test_multiple_choice_form_scores_correct_responses(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.text_area(key="notes_input_0").set_value(self.sample).run()
+        app.segmented_control(key="study_tool").set_value("Explore").run()
+        app.segmented_control(key="explore_tool").set_value("Multiple choice").run()
+        fingerprint = hashlib.sha256(f"None:{self.sample}".encode("utf-8")).hexdigest()[:16]
+        questions = generate_multiple_choice_quiz([SourcePage(None, self.sample)], 5)
+        for index, question in enumerate(questions, start=1):
+            app.radio(key=f"choice_{fingerprint}_{index}").set_value(question.answer)
+        app.button[0].click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any(item.proto.title == "Quiz checked" for item in app.success))
+        self.assertTrue(any(f"{len(questions)} out of {len(questions)}" in item.value for item in app.success))
+
+    def test_explore_keywords_render(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.text_area(key="notes_input_0").set_value(self.sample).run()
+        app.segmented_control(key="study_tool").set_value("Explore").run()
+        app.segmented_control(key="explore_tool").set_value("Topics & keywords").run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any("Topics & keywords" in item.value for item in app.subheader))
 
 
 if __name__ == "__main__":

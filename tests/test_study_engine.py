@@ -13,6 +13,9 @@ from study_engine import (  # noqa: E402
     clean_pdf_text,
     compose_overview,
     extract_pdf_pages,
+    extract_key_terms,
+    generate_flashcards,
+    generate_multiple_choice_quiz,
     generate_quiz,
     is_document_overview_question,
     natural_answer_prefix,
@@ -114,6 +117,56 @@ class TextProcessingTests(unittest.TestCase):
         self.assertTrue(result.confident)
         self.assertTrue(result.evidence)
 
+    def test_hyphenated_pdf_terms_match_questions_written_with_spaces(self):
+        pages = pages_from_text(
+            "Column-family stores allow you to store data with keys mapped to values."
+        )
+        result = answer_question(pages, "What do column family stores allow you to store?")
+        self.assertTrue(result.confident)
+        self.assertIn("keys mapped to values", result.answer)
+
+    def test_lsa_retrieves_relevant_source_for_paraphrased_questions(self):
+        pages = pages_from_text(
+            "Photosynthesis converts sunlight into chemical energy in green plants. "
+            "Chlorophyll is the green pigment that captures light for photosynthesis. "
+            "Plants use this process to transform solar energy into stored food. "
+            "Sunlight is absorbed by chlorophyll in plant leaves."
+        )
+        result = answer_question(pages, "What does the green substance trap?")
+        self.assertTrue(result.confident)
+        self.assertIn("Chlorophyll", result.answer)
+        process = answer_question(pages, "What does the plant turn sunlight into?")
+        self.assertTrue(process.confident)
+        self.assertIn("converts sunlight into chemical energy", process.answer)
+
+    def test_code_examples_do_not_become_answers_or_quiz_questions(self):
+        pages = pages_from_text(
+            "Insert into Column family by Cassandra client • "
+            "SET Customer['mfwoler']['city']='Boston'; • "
+            "Column-family stores, such as Cassandra and HBase, allow you to store data with keys mapped to values."
+        )
+        questions = generate_quiz(pages, 5)
+        self.assertTrue(questions)
+        self.assertTrue(all("mfwoler" not in question.prompt for question in questions))
+        result = answer_question(pages, "What is the city of mfwoler?")
+        self.assertFalse(result.confident)
+        definition = answer_question(pages, "What do column family stores allow?")
+        self.assertTrue(definition.confident)
+        self.assertIn("keys mapped to values", definition.answer)
+
+    def test_database_pdf_example_creates_a_concept_question_not_a_random_cloze(self):
+        pages = pages_from_text(
+            "Insert into Column family by Cassandra client • "
+            "SET Customer['mfwoler']['city']='Boston'; • "
+            "We can read the data back using the GET command. • "
+            "Column-family Stores • Column-family stores, such as Cassandra, HBase, ________, and Amazon SimpleDB allow you to store data with keys mapped to values and the values grouped into multiple column families."
+        )
+        questions = generate_quiz(pages, 5)
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].answer.casefold(), "column-family stores")
+        self.assertIn("Which concept is described", questions[0].prompt)
+        self.assertNotIn("mfwoler", questions[0].prompt)
+
     def test_unrelated_question_does_not_invent_an_answer(self):
         result = answer_question(pages_from_text(SAMPLE), "Who invented the telephone?")
         self.assertFalse(result.confident)
@@ -129,6 +182,29 @@ class TextProcessingTests(unittest.TestCase):
         self.assertEqual(len({question.answer.lower() for question in questions}), len(questions))
         self.assertTrue(answers_match("  GLUCOSE! ", "glucose"))
         self.assertFalse(answers_match("oxygen", "glucose"))
+
+    def test_flashcards_connect_a_key_term_to_its_source_sentence(self):
+        cards = generate_flashcards(pages_from_text(SAMPLE), 3)
+        self.assertTrue(cards)
+        for card in cards:
+            self.assertIn(card.front, card.back)
+
+    def test_multiple_choice_questions_have_unique_choices_and_correct_answer(self):
+        questions = generate_multiple_choice_quiz(pages_from_text(SAMPLE), 3)
+        self.assertTrue(questions)
+        for question in questions:
+            self.assertIn(question.answer, question.choices)
+            self.assertEqual(len(question.choices), len(set(question.choices)))
+
+    def test_multiple_choice_needs_multiple_distinct_concepts(self):
+        pages = pages_from_text("Photosynthesis is the process by which plants convert light into chemical energy.")
+        self.assertEqual(generate_multiple_choice_quiz(pages, 5), [])
+
+    def test_key_terms_rank_subject_words_from_material(self):
+        terms = extract_key_terms(pages_from_text(SAMPLE), 8)
+        labels = {item.term.casefold() for item in terms}
+        self.assertTrue(labels & {"photosynthesis", "chlorophyll", "glucose", "sunlight"})
+        self.assertTrue(all(item.frequency >= 1 for item in terms))
 
     def test_pdf_extraction_preserves_page_number_and_text(self):
         pages = extract_pdf_pages(make_text_pdf("Photosynthesis converts light into energy."))
